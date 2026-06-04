@@ -5,6 +5,10 @@ import sys
 load_dotenv()
 # --- CONFIGURATION & SECURITY GATEKEEPER ---
 api_key = os.environ.get("GROQ_API_KEY")
+chroma_directory = os.environ.get("CHROMA_DIR")
+chroma_collection = os.environ.get("COLLECTION_NAME")
+db_name = os.getenv("DB_NAME", "history.db")
+
 if not api_key:
     raise ValueError(
         "GROQ_API_KEY not found!\n"
@@ -15,9 +19,9 @@ if not api_key:
         "Or create a .env file with: GROQ_API_KEY=your-key-here"
     )
 
-PDF_PATH = "sample.pdf"
 # MODEL_NAME = os.getenv("MODEL_NAME", "gemini-2.0-flash")
-DB_NAME = os.getenv("DB_NAME", "summaries.db")
 
-# if not GROQ_API_KEY:
-#     sys.exit(1)
+
+
+if not api_key:
+    sys.exit(1)

@@ -1,13 +1,21 @@
 import streamlit as st
+from collections import OrderedDict
+
 from database.db_manager import (
-    init_db,
-    get_sessions,
     create_session,
-    get_session_by_document,
-    save_message,
+    delete_document,
+    delete_sessions_for_document,
     get_chat_history,
+    get_document,
+    get_documents,
+    get_or_create_document,
+    get_sessions,
+    init_db,
+    save_message,
 )
 from services.groq_service import get_stream, parse_stream_chunks
+from utils.parse import delete_pdf, index_pdf
+
 
 st.set_page_config(page_title="Document Chat", layout="wide")
 init_db()
@@ -18,58 +26,189 @@ if "current_session_id" not in st.session_state:
 if "active_document_id" not in st.session_state:
     st.session_state.active_document_id = None
 
+if "uploader_key" not in st.session_state:
+    st.session_state.uploader_key = 0
 
-def open_document_chat(document_id):
-    if not document_id:
-        return
+if "pending_delete_document_id" not in st.session_state:
+    st.session_state.pending_delete_document_id = None
+
+if "pending_delete_sessions_document_id" not in st.session_state:
+    st.session_state.pending_delete_sessions_document_id = None
+
+
+def start_new_chat_for_document(document_id):
+    st.session_state.active_document_id = document_id
+    st.session_state.current_session_id = create_session(document_id=document_id)
+
+
+def handle_uploaded_document(uploaded_file):
+    file_bytes = uploaded_file.getvalue()
+    document_id, is_new_document = get_or_create_document(uploaded_file.name, file_bytes)
+
+    if is_new_document:
+        index_pdf(uploaded_file.name, file_bytes, document_id)
+
+    start_new_chat_for_document(document_id)
+    return is_new_document
+
+
+def handle_deleted_document(document_id):
+    delete_pdf(document_id)
+    delete_document(document_id)
 
     if st.session_state.active_document_id == document_id:
-        return
+        st.session_state.active_document_id = None
+        st.session_state.current_session_id = None
 
-    st.session_state.active_document_id = document_id
 
-    existing_session = get_session_by_document(document_id)
-    if existing_session:
-        st.session_state.current_session_id = existing_session[0]
-    else:
-        st.session_state.current_session_id = create_session(document_id=document_id)
+def handle_deleted_document_sessions(document_id):
+    deleted_count = delete_sessions_for_document(document_id)
+
+    if st.session_state.active_document_id == document_id:
+        st.session_state.active_document_id = None
+        st.session_state.current_session_id = None
+
+    return deleted_count
 
 
 with st.sidebar:
-    st.title("Chat History")
+    st.title("Documents")
 
-    # Example: call this after upload completes successfully
-    # if uploaded_document_id:
-    #     open_document_chat(uploaded_document_id)
+    is_busy = (
+        st.session_state.pending_delete_document_id is not None
+        or st.session_state.pending_delete_sessions_document_id is not None
+    )
 
-    # Example: call this when a recent document is selected
-    # if recent_document_id:
-    #     open_document_chat(recent_document_id)
+    if st.session_state.pending_delete_document_id is not None:
+        with st.spinner("Deleting document..."):
+            handle_deleted_document(st.session_state.pending_delete_document_id)
+        st.session_state.pending_delete_document_id = None
+        st.session_state.upload_status = (
+            "Document deleted. Existing chats for it are now unavailable."
+        )
+        st.rerun()
+
+    if st.session_state.pending_delete_sessions_document_id is not None:
+        with st.spinner("Removing unavailable chats..."):
+            deleted_count = handle_deleted_document_sessions(
+                st.session_state.pending_delete_sessions_document_id
+            )
+        st.session_state.pending_delete_sessions_document_id = None
+        st.session_state.upload_status = (
+            f"Removed {deleted_count} chat session(s) for the deleted document."
+        )
+        st.rerun()
+
+    uploaded_file = st.file_uploader(
+        "Upload a PDF",
+        type=["pdf"],
+        key=f"pdf_uploader_{st.session_state.uploader_key}",
+        disabled=is_busy,
+    )
+    if uploaded_file is not None:
+        upload_key = (uploaded_file.name, uploaded_file.size)
+        if st.session_state.get("last_uploaded_key") != upload_key:
+            with st.spinner("Parsing and uploading PDF..."):
+                is_new_document = handle_uploaded_document(uploaded_file)
+            st.session_state.last_uploaded_key = upload_key
+            st.session_state.uploader_key += 1
+            st.session_state.upload_status = (
+                "Document uploaded and indexed."
+                if is_new_document
+                else "Document already exists. Reusing the stored copy."
+            )
+            st.rerun()
+
+    if st.session_state.get("upload_status"):
+        st.caption(st.session_state.upload_status)
 
     st.divider()
+    st.title("Chat History")
 
+    documents = {
+        document_id: file_name
+        for document_id, file_name, _, _ in get_documents()
+    }
     sessions = get_sessions()
-    for s_id, s_title, s_document_id in sessions:
-        label = f"{s_title} [{s_document_id}]"
-        if st.button(label, key=f"session_{s_id}", use_container_width=True):
-            st.session_state.current_session_id = s_id
-            st.session_state.active_document_id = s_document_id
-            st.rerun()
+    grouped_sessions = OrderedDict()
+    for s_id, s_title, s_document_id, file_name in sessions:
+        resolved_name = documents.get(s_document_id) or file_name
+        document_label = resolved_name or f"Deleted document #{s_document_id}"
+        if s_document_id not in grouped_sessions:
+            grouped_sessions[s_document_id] = {
+                "label": document_label,
+                "sessions": [],
+                "is_deleted": s_document_id not in documents,
+            }
+        grouped_sessions[s_document_id]["sessions"].append((s_id, s_title))
+
+    for document_id, group in grouped_sessions.items():
+        with st.container(border=True):
+            title_col, menu_col = st.columns([0.82, 0.18])
+            with title_col:
+                st.markdown(f"**{group['label']}**")
+            with menu_col:
+                if is_busy:
+                    st.button("⋮", key=f"menu_disabled_{document_id}", disabled=True, use_container_width=True)
+                else:
+                    with st.popover("⋮", use_container_width=True):
+                        if group["is_deleted"]:
+                            if st.button(
+                                "Remove chats",
+                                key=f"delete_group_{document_id}",
+                                use_container_width=True,
+                            ):
+                                st.session_state.pending_delete_sessions_document_id = document_id
+                                st.rerun()
+                        else:
+                            if st.button(
+                                "New chat",
+                                key=f"new_chat_{document_id}",
+                                use_container_width=True,
+                            ):
+                                start_new_chat_for_document(document_id)
+                                st.rerun()
+                            if st.button(
+                                "Delete document",
+                                key=f"delete_document_{document_id}",
+                                use_container_width=True,
+                            ):
+                                st.session_state.pending_delete_document_id = document_id
+                                st.rerun()
+
+            with st.expander("Chats", expanded=document_id == st.session_state.active_document_id):
+                if group["is_deleted"]:
+                    st.caption("This document was deleted. These chats are kept only for reference until removed.")
+
+                for s_id, s_title in group["sessions"]:
+                    button_type = "primary" if s_id == st.session_state.current_session_id else "secondary"
+                    if st.button(
+                        s_title,
+                        key=f"session_{s_id}",
+                        use_container_width=True,
+                        type=button_type,
+                        disabled=is_busy,
+                    ):
+                        st.session_state.current_session_id = s_id
+                        st.session_state.active_document_id = document_id
+                        st.rerun()
+
 
 st.title("Document Chat")
 
-if st.session_state.active_document_id is None:
-    st.info("Upload a document or select one from recently uploaded to start chatting.")
-elif st.session_state.current_session_id is None:
-    st.info("No chat session found for the selected document.")
+if st.session_state.current_session_id is None:
+    st.info("Upload a PDF to start a new chat.")
 else:
+    active_document = get_document(st.session_state.active_document_id)
     chat_history = get_chat_history(st.session_state.current_session_id)
 
     for message in chat_history:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
 
-    if prompt := st.chat_input("Ask about this document"):
+    if active_document is None:
+        st.warning("This chat is linked to a document that has been deleted, so it can no longer be used.")
+    elif prompt := st.chat_input("Ask about this document"):
         with st.chat_message("user"):
             st.markdown(prompt)
 

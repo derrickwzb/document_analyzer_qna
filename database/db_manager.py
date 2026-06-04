@@ -1,44 +1,87 @@
+import hashlib
 import sqlite3
 from datetime import datetime
-import config
+from config import chroma_directory,chroma_collection,db_name
+from langchain_chroma import Chroma
+from utils.embed import get_embedding_model
+
+def get_vector_store():
+    return Chroma(
+        persist_directory=chroma_directory,
+        embedding_function=get_embedding_model(),
+        collection_name=chroma_collection,
+    )
+
+def _connect():
+    return sqlite3.connect(db_name)
+
+
+def _column_exists(cursor, table_name, column_name):
+    cursor.execute(f"PRAGMA table_info({table_name})")
+    return any(row[1] == column_name for row in cursor.fetchall())
+
 
 def init_db():
     """
-    Creates the database tables if they do not exist yet.
-    Sets up a relational structure linking 'messages' back to specific 'sessions'.
+    Create the database tables and perform lightweight schema upgrades.
     """
-    conn = sqlite3.connect(config.DB_NAME)
+    conn = _connect()
     c = conn.cursor()
-    
-    # Create the 'sessions' parent table
-    c.execute('''CREATE TABLE IF NOT EXISTS sessions 
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT, 
-                 document_id TEXT NOT NULL,
-                  title TEXT, 
-                  created_at DATETIME)''')
-                  
-    # Create the 'messages' child table with a foreign key referencing the parent table
-    c.execute('''CREATE TABLE IF NOT EXISTS messages 
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT, 
-                  session_id INTEGER,
-                  role TEXT, 
-                  content TEXT, 
-                  timestamp DATETIME,
-                  FOREIGN KEY(session_id) REFERENCES sessions(id))''')
+
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS documents (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            file_name TEXT NOT NULL,
+            file_hash TEXT NOT NULL UNIQUE,
+            created_at DATETIME
+        )
+        """
+    )
+
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            document_id INTEGER,
+            title TEXT,
+            created_at DATETIME,
+            FOREIGN KEY(document_id) REFERENCES documents(id)
+        )
+        """
+    )
+
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id INTEGER,
+            role TEXT,
+            content TEXT,
+            timestamp DATETIME,
+            FOREIGN KEY(session_id) REFERENCES sessions(id)
+        )
+        """
+    )
+
+    if not _column_exists(c, "sessions", "document_id"):
+        c.execute("ALTER TABLE sessions ADD COLUMN document_id INTEGER")
+
     conn.commit()
     conn.close()
 
-def get_sessions():
-    """
-    Fetches all unique chat sessions from the database, sorted newest first.
-    Returns a list of tuples: [(id, title), (id, title), ...]
-    """
-    conn = sqlite3.connect(config.DB_NAME)
+
+def compute_file_hash(file_bytes):
+    return hashlib.sha256(file_bytes).hexdigest()
+
+
+def get_documents():
+    conn = _connect()
     c = conn.cursor()
     c.execute(
         """
-        SELECT id, title, document_id
-        FROM sessions
+        SELECT id, file_name, file_hash, created_at
+        FROM documents
         ORDER BY created_at DESC
         """
     )
@@ -46,8 +89,97 @@ def get_sessions():
     conn.close()
     return data
 
+
+def get_document_by_hash(file_hash):
+    conn = _connect()
+    c = conn.cursor()
+    c.execute(
+        """
+        SELECT id, file_name, file_hash, created_at
+        FROM documents
+        WHERE file_hash = ?
+        """,
+        (file_hash,),
+    )
+    row = c.fetchone()
+    conn.close()
+    return row
+
+
+def get_document(document_id):
+    conn = _connect()
+    c = conn.cursor()
+    c.execute(
+        """
+        SELECT id, file_name, file_hash, created_at
+        FROM documents
+        WHERE id = ?
+        """,
+        (document_id,),
+    )
+    row = c.fetchone()
+    conn.close()
+    return row
+
+
+def delete_document(document_id):
+    conn = _connect()
+    c = conn.cursor()
+    c.execute(
+        """
+        DELETE FROM documents
+        WHERE id = ?
+        """,
+        (document_id,),
+    )
+    deleted = c.rowcount > 0
+    conn.commit()
+    conn.close()
+    return deleted
+
+
+def create_document(file_name, file_hash):
+    conn = _connect()
+    c = conn.cursor()
+    c.execute(
+        """
+        INSERT INTO documents (file_name, file_hash, created_at)
+        VALUES (?, ?, ?)
+        """,
+        (file_name, file_hash, datetime.now()),
+    )
+    document_id = c.lastrowid
+    conn.commit()
+    conn.close()
+    return document_id
+
+
+def get_or_create_document(file_name, file_bytes):
+    file_hash = compute_file_hash(file_bytes)
+    existing = get_document_by_hash(file_hash)
+    if existing:
+        return existing[0], False
+    return create_document(file_name, file_hash), True
+
+
+def get_sessions():
+    conn = _connect()
+    c = conn.cursor()
+    c.execute(
+        """
+        SELECT sessions.id, sessions.title, sessions.document_id, documents.file_name
+        FROM sessions
+        LEFT JOIN documents ON documents.id = sessions.document_id
+        ORDER BY sessions.created_at DESC
+        """
+    )
+    data = c.fetchall()
+    conn.close()
+    return data
+
+
 def create_session(document_id, title="New Chat"):
-    conn = sqlite3.connect(config.DB_NAME)
+    conn = _connect()
     c = conn.cursor()
     c.execute(
         """
@@ -61,25 +193,9 @@ def create_session(document_id, title="New Chat"):
     conn.close()
     return session_id
 
-def get_session_by_document(document_id):
-    conn = sqlite3.connect(config.DB_NAME)
-    c = conn.cursor()
-    c.execute(
-        """
-        SELECT id, title, document_id
-        FROM sessions
-        WHERE document_id = ?
-        ORDER BY created_at DESC
-        LIMIT 1
-        """,
-        (document_id,),
-    )
-    row = c.fetchone()
-    conn.close()
-    return row
 
 def get_document_id_for_session(session_id):
-    conn = sqlite3.connect(config.DB_NAME)
+    conn = _connect()
     c = conn.cursor()
     c.execute(
         """
@@ -93,10 +209,45 @@ def get_document_id_for_session(session_id):
     conn.close()
     return row[0] if row else None
 
-def save_message(session_id, role, content):
-    conn = sqlite3.connect(config.DB_NAME)
-    c = conn.cursor()
 
+def delete_sessions_for_document(document_id):
+    conn = _connect()
+    c = conn.cursor()
+    c.execute(
+        """
+        SELECT id
+        FROM sessions
+        WHERE document_id = ?
+        """,
+        (document_id,),
+    )
+    session_ids = [row[0] for row in c.fetchall()]
+
+    if session_ids:
+        placeholders = ",".join("?" for _ in session_ids)
+        c.execute(
+            f"""
+            DELETE FROM messages
+            WHERE session_id IN ({placeholders})
+            """,
+            session_ids,
+        )
+        c.execute(
+            """
+            DELETE FROM sessions
+            WHERE document_id = ?
+            """,
+            (document_id,),
+        )
+
+    conn.commit()
+    conn.close()
+    return len(session_ids)
+
+
+def save_message(session_id, role, content):
+    conn = _connect()
+    c = conn.cursor()
     c.execute(
         """
         INSERT INTO messages (session_id, role, content, timestamp)
@@ -114,8 +265,9 @@ def save_message(session_id, role, content):
     conn.commit()
     conn.close()
 
+
 def get_chat_history(session_id):
-    conn = sqlite3.connect(config.DB_NAME)
+    conn = _connect()
     c = conn.cursor()
     c.execute(
         """
