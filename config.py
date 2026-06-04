@@ -19,9 +19,5 @@ if not api_key:
         "Or create a .env file with: GROQ_API_KEY=your-key-here"
     )
 
-# MODEL_NAME = os.getenv("MODEL_NAME", "gemini-2.0-flash")
-
-
-
 if not api_key:
     sys.exit(1)
