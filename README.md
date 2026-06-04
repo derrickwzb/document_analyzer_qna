@@ -1,160 +1,98 @@
-# Document Analyzer QnA
+# Section 1 — Project Title and Description
 
-Streamlit-based document chat app for uploading PDFs, indexing them into Chroma, and asking questions against a single selected document with Groq-powered responses.
+## Document Analyzer QnA
 
-## Features
+Document Analyzer QnA is a Streamlit application that lets users upload PDF or TXT documents, index them with Chroma, and ask questions about one document at a time using the Groq API. It is for students, developers, and anyone who wants a simple document-based AI chat tool.
 
-- Upload a PDF and index it into Chroma for retrieval-augmented Q&A.
-- Deduplicate documents by file hash so the same file is only stored once.
-- Create multiple chat sessions for the same document.
-- Group chat history by document in the sidebar.
-- Delete a document from storage while keeping old chats visible as unavailable.
-- Remove stale chats for deleted documents from the sidebar.
-- Stream assistant responses in the chat UI.
+# Section 2 — Problem Statement
 
-## How It Works
+Reading long documents and manually searching for answers can be slow and frustrating, especially when users want quick summaries or fact lookup. This application solves that problem by turning uploaded documents into searchable chat sessions, making it easier to explore the contents through natural-language questions.
 
-The app keeps three layers in sync:
+# Section 3 — Technology Stack
 
-- `documents` in SQLite
-  Stores one row per unique uploaded file.
-- `sessions` in SQLite
-  Stores chat sessions, each linked to one document.
-- `document_chunks` in Chroma
-  Stores embedded PDF chunks with `document_id` metadata so retrieval stays scoped to the active document.
+- Python
+- Streamlit
+- SQLite
+- LangChain
+- langchain-chroma
+- langchain-huggingface
+- pypdf
+- python-dotenv
+- Groq API
 
-When a PDF is uploaded:
+# Section 4 — Setup Instructions
 
-1. Its bytes are hashed.
-2. SQLite checks whether that file already exists.
-3. If it is new, the PDF is parsed, chunked, embedded, and stored in Chroma.
-4. A new chat session is created for that document.
+1. Clone the repository.
 
-When a user asks a question:
-
-1. The active document ID is read from the current session.
-2. Chroma retrieves only chunks for that document.
-3. The retrieved context and chat history are sent to Groq.
-4. The response is streamed back into Streamlit and saved to SQLite.
-
-## Tech Stack
-
-- `Streamlit` for the UI
-- `SQLite` for document/session/message storage
-- `Chroma` for vector storage
-- `LangChain` components for loading, splitting, and retrieval
-- `sentence-transformers/all-MiniLM-L6-v2` for embeddings
-- `Groq` for answer generation
-- `pypdf` / `PyPDFLoader` for PDF ingestion
-
-## Project Structure
-
-```text
-.
-|-- app.py
-|-- config.py
-|-- requirements.txt
-|-- database/
-|   |-- db_manager.py
-|   `-- sqlite.py
-|-- services/
-|   `-- groq_service.py
-`-- utils/
-    |-- embed.py
-    |-- parse.py
-    |-- prompts.py
-    `-- retrieve.py
+```powershell
+git clone <your-repository-url>
+cd document_analyzer_qna
 ```
 
-## Requirements
-
-- Python 3.10+ recommended
-- A Groq API key
-
-## Installation
-
-1. Create and activate a virtual environment.
+2. Create and activate a virtual environment.
 
 ```powershell
 python -m venv venv
 .\venv\Scripts\Activate.ps1
 ```
 
-2. Install dependencies.
+3. Install dependencies.
 
 ```powershell
 pip install -r requirements.txt
 ```
 
-3. Create a `.env` file in the project root.
+4. Create a `.env` file in the project root and fill in your values.
 
 ```env
 GROQ_API_KEY=your_groq_api_key
-CHROMA_DIR=./chroma_rag_demo
+CHROMA_DIR=./db
 COLLECTION_NAME=document_chunks
 DB_NAME=history.db
 ```
 
-## Configuration
-
-[config.py]() reads these environment variables:
-
-- `GROQ_API_KEY`
-- `CHROMA_DIR`
-- `COLLECTION_NAME`
-- `DB_NAME`
-
-If `GROQ_API_KEY` is missing, the app exits at startup.
-
-## Run the App
+5. Run the application.
 
 ```powershell
 streamlit run app.py
 ```
 
-Then open the local Streamlit URL shown in the terminal.
+# Section 5 — Usage Examples
 
-## Usage
+## Example 1
 
-1. Upload a PDF from the sidebar.
-2. Wait for the parsing/indexing spinner to finish.
-3. Open the document’s grouped chat section in the sidebar.
-4. Start chatting with that document.
-5. Use the `⋮` menu next to a document name to:
-   - start a new chat
-   - delete the document
-   - remove stale chats for deleted documents
+User input:
 
-## Current Behavior
+```text
+What is this document about?
+```
 
-- Uploading the same PDF again reuses the existing stored document.
-- A document can have multiple chat sessions.
-- Sessions are grouped by document in the sidebar.
-- If a document is deleted from Chroma and SQLite, its old chats become unavailable.
-- Unavailable chat groups can be removed separately.
-- Delete actions show loading spinners and temporarily block other sidebar actions.
+Application output:
 
-## Known Limitations
+```text
+This document is mainly about the project goals, requirements, system design, implementation, testing, and deployment. It reads like a project report or technical overview with sections covering both planning and code structure.
+```
 
-- PDF extraction quality depends on the source file. Repeated headers, table-of-contents pages, or messy layouts can lead to noisy retrieval.
-- Broad questions like “what is this about?” may perform worse when the retrieved chunks are mostly outlines instead of body text.
-- The app currently supports PDF upload only.
-- Retrieval quality depends on chunking, embedding quality, and the cleanliness of extracted PDF text.
+## Example 2
 
-## Troubleshooting
+User input:
 
-### `GROQ_API_KEY not found`
+```text
+What are the main points on page 2?
+```
 
-Set the key in `.env` or your shell environment before starting the app.
+Application output:
 
-### Deleted document chats still appear
+```text
+The document says the main points include identifying key requirements, developing a system design, implementing a working prototype, testing and refining the system, and deploying the final product.
+```
 
-That is expected until you remove those stale chats from the deleted document’s menu.
+# Section 6 — Known Limitations
 
-### Weak or repetitive answers
+- PDF extraction can be noisy when a file has repeated headers, outlines, or poor formatting, which can lead to repetitive or weak answers.
+- Broad questions such as “what is this about?” or ambiguous questions such as “what is the first point?” may return less accurate answers if the retrieved chunks are unclear.
 
-This usually means the retrieved PDF text is repetitive or poorly extracted. Try:
+# Section 7 — Future Improvements
 
-- asking a more specific question
-- uploading a cleaner PDF
-
+- Improve preprocessing and chunk cleanup so repeated PDF text and outline-heavy pages do not dominate retrieval.
+- Add stronger answer controls for summary-style and ambiguous questions, plus better citations and document previews.

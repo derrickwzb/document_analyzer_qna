@@ -7,7 +7,9 @@ from utils.prompts import RAG_QA_PROMPT as SYSTEM_PROMPT
 
 groq_client = Groq(api_key=os.environ.get(api_key))
 
+
 def get_stream(chat_history, fresh_prompt, document_id):
+    # Retrieve document-scoped context and start a streaming Groq response.
     topk = get_dynamic_top_k(fresh_prompt)
 
     retriever = get_vector_store().as_retriever(
@@ -48,7 +50,9 @@ def get_stream(chat_history, fresh_prompt, document_id):
         stream=True,
     )
 
+
 def parse_stream_chunks(raw_stream):
+    # Yield plain text deltas from the Groq streaming response.
     for chunk in raw_stream:
         content = chunk.choices[0].delta.content
         if content:

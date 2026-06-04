@@ -1,14 +1,20 @@
 import os
 import tempfile
 
+from langchain_core.documents import Document
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from database.db_manager import get_vector_store
 
 
-def _load_pages_from_bytes(file_name, file_bytes):
-    suffix = os.path.splitext(file_name)[1] or ".pdf"
+def _load_documents_from_bytes(file_name, file_bytes):
+    # Load either PDF pages or plain text into LangChain documents.
+    suffix = os.path.splitext(file_name)[1].lower() or ".pdf"
     temp_path = None
+
+    if suffix == ".txt":
+        text = file_bytes.decode("utf-8", errors="replace")
+        return [Document(page_content=text, metadata={"source": file_name, "page": 1})]
 
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
@@ -22,8 +28,9 @@ def _load_pages_from_bytes(file_name, file_bytes):
             os.remove(temp_path)
 
 
-def index_pdf(file_name, file_bytes, document_id):
-    pages = _load_pages_from_bytes(file_name, file_bytes)
+def index_document(file_name, file_bytes, document_id):
+    # Split a document into chunks and store them in Chroma with metadata.
+    pages = _load_documents_from_bytes(file_name, file_bytes)
     splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=120)
     chunks = splitter.split_documents(pages)
 
@@ -37,18 +44,23 @@ def index_pdf(file_name, file_bytes, document_id):
     return len(chunks)
 
 
+def index_pdf(file_name, file_bytes, document_id):
+    # Keep backward compatibility for callers still using the old helper name.
+    return index_document(file_name, file_bytes, document_id)
+
+
 def delete_pdf(document_id):
+    # Remove all stored chunks for one document from Chroma.
     vector_store = get_vector_store()
     vector_store.delete(where={"document_id": str(document_id)})
+
 
 MIN_TOP_K = 4
 MAX_TOP_K = 6
 
+
 def get_dynamic_top_k(question: str) -> int:
-    """
-    Decide how many chunks to retrieve based on the question.
-    Always capped at MAX_TOP_K.
-    """
+    # Pick a retrieval depth based on how broad or specific the question looks.
 
     question_lower = question.lower()
     word_count = len(question.split())

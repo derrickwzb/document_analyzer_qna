@@ -14,7 +14,7 @@ from database.db_manager import (
     save_message,
 )
 from services.groq_service import get_stream, parse_stream_chunks
-from utils.parse import delete_pdf, index_pdf
+from utils.parse import delete_pdf, index_document
 
 
 st.set_page_config(page_title="Document Chat", layout="wide")
@@ -37,22 +37,25 @@ if "pending_delete_sessions_document_id" not in st.session_state:
 
 
 def start_new_chat_for_document(document_id):
+    # Create and activate a new chat session for the chosen document.
     st.session_state.active_document_id = document_id
     st.session_state.current_session_id = create_session(document_id=document_id)
 
 
 def handle_uploaded_document(uploaded_file):
+    # Deduplicate the uploaded file, index it if needed, and open a new chat session.
     file_bytes = uploaded_file.getvalue()
     document_id, is_new_document = get_or_create_document(uploaded_file.name, file_bytes)
 
     if is_new_document:
-        index_pdf(uploaded_file.name, file_bytes, document_id)
+        index_document(uploaded_file.name, file_bytes, document_id)
 
     start_new_chat_for_document(document_id)
     return is_new_document
 
 
 def handle_deleted_document(document_id):
+    # Remove a document from Chroma and SQLite and clear it from the active view.
     delete_pdf(document_id)
     delete_document(document_id)
 
@@ -62,6 +65,7 @@ def handle_deleted_document(document_id):
 
 
 def handle_deleted_document_sessions(document_id):
+    # Remove stale chat sessions that still point to a deleted document.
     deleted_count = delete_sessions_for_document(document_id)
 
     if st.session_state.active_document_id == document_id:
@@ -69,6 +73,27 @@ def handle_deleted_document_sessions(document_id):
         st.session_state.current_session_id = None
 
     return deleted_count
+
+
+def get_user_facing_error_message(error):
+    # Convert internal exceptions into short messages that make sense in the UI.
+    message = str(error).strip()
+    return message or "Something went wrong while processing your request."
+
+
+def get_safe_response_text(stream_result):
+    # Normalize the streamed response so empty or whitespace-only replies are treated as failures.
+    if isinstance(stream_result, str):
+        response_text = stream_result.strip()
+    elif stream_result is None:
+        response_text = ""
+    else:
+        response_text = str(stream_result).strip()
+
+    if not response_text:
+        raise ValueError("The assistant returned an empty response. Please try again.")
+
+    return response_text
 
 
 with st.sidebar:
@@ -80,43 +105,61 @@ with st.sidebar:
     )
 
     if st.session_state.pending_delete_document_id is not None:
-        with st.spinner("Deleting document..."):
-            handle_deleted_document(st.session_state.pending_delete_document_id)
-        st.session_state.pending_delete_document_id = None
-        st.session_state.upload_status = (
-            "Document deleted. Existing chats for it are now unavailable."
-        )
+        try:
+            with st.spinner("Deleting document..."):
+                handle_deleted_document(st.session_state.pending_delete_document_id)
+            st.session_state.upload_status = (
+                "Document deleted. Existing chats for it are now unavailable."
+            )
+        except Exception as error:
+            st.session_state.upload_status = (
+                f"Could not delete the document: {get_user_facing_error_message(error)}"
+            )
+        finally:
+            st.session_state.pending_delete_document_id = None
         st.rerun()
 
     if st.session_state.pending_delete_sessions_document_id is not None:
-        with st.spinner("Removing unavailable chats..."):
-            deleted_count = handle_deleted_document_sessions(
-                st.session_state.pending_delete_sessions_document_id
+        try:
+            with st.spinner("Removing unavailable chats..."):
+                deleted_count = handle_deleted_document_sessions(
+                    st.session_state.pending_delete_sessions_document_id
+                )
+            st.session_state.upload_status = (
+                f"Removed {deleted_count} chat session(s) for the deleted document."
             )
-        st.session_state.pending_delete_sessions_document_id = None
-        st.session_state.upload_status = (
-            f"Removed {deleted_count} chat session(s) for the deleted document."
-        )
+        except Exception as error:
+            st.session_state.upload_status = (
+                f"Could not remove the chats: {get_user_facing_error_message(error)}"
+            )
+        finally:
+            st.session_state.pending_delete_sessions_document_id = None
         st.rerun()
 
     uploaded_file = st.file_uploader(
-        "Upload a PDF",
-        type=["pdf"],
+        "Upload a PDF or TXT file",
+        type=["pdf", "txt"],
         key=f"pdf_uploader_{st.session_state.uploader_key}",
         disabled=is_busy,
     )
     if uploaded_file is not None:
         upload_key = (uploaded_file.name, uploaded_file.size)
         if st.session_state.get("last_uploaded_key") != upload_key:
-            with st.spinner("Parsing and uploading PDF..."):
-                is_new_document = handle_uploaded_document(uploaded_file)
-            st.session_state.last_uploaded_key = upload_key
-            st.session_state.uploader_key += 1
-            st.session_state.upload_status = (
-                "Document uploaded and indexed."
-                if is_new_document
-                else "Document already exists. Reusing the stored copy."
-            )
+            try:
+                with st.spinner("Parsing and uploading document..."):
+                    is_new_document = handle_uploaded_document(uploaded_file)
+                st.session_state.last_uploaded_key = upload_key
+                st.session_state.uploader_key += 1
+                st.session_state.upload_status = (
+                    "Document uploaded and indexed."
+                    if is_new_document
+                    else "Document already exists. Reusing the stored copy."
+                )
+            except Exception as error:
+                st.session_state.upload_status = (
+                    f"Could not upload the document: {get_user_facing_error_message(error)}"
+                )
+                st.session_state.uploader_key += 1
             st.rerun()
 
     if st.session_state.get("upload_status"):
@@ -197,7 +240,7 @@ with st.sidebar:
 st.title("Document Chat")
 
 if st.session_state.current_session_id is None:
-    st.info("Upload a PDF to start a new chat.")
+    st.info("Upload a PDF or TXT file to start a new chat.")
 else:
     active_document = get_document(st.session_state.active_document_id)
     chat_history = get_chat_history(st.session_state.current_session_id)
@@ -222,7 +265,7 @@ else:
                     document_id=st.session_state.active_document_id,
                 )
                 clean_text_stream = parse_stream_chunks(raw_stream)
-                full_response = st.write_stream(clean_text_stream)
+                full_response = get_safe_response_text(st.write_stream(clean_text_stream))
                 save_message(st.session_state.current_session_id, "assistant", full_response)
-            except Exception as e:
-                st.error(f"Error: {str(e)}")
+            except Exception as error:
+                st.error(f"Could not generate a response: {get_user_facing_error_message(error)}")

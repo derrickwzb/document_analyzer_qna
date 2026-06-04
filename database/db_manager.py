@@ -6,6 +6,7 @@ from langchain_chroma import Chroma
 from utils.embed import get_embedding_model
 
 def get_vector_store():
+    # Build a Chroma client for the configured collection.
     return Chroma(
         persist_directory=chroma_directory,
         embedding_function=get_embedding_model(),
@@ -13,18 +14,18 @@ def get_vector_store():
     )
 
 def _connect():
+    # Open a SQLite connection to the configured history database.
     return sqlite3.connect(db_name)
 
 
 def _column_exists(cursor, table_name, column_name):
+    # Check whether a table already contains a specific column.
     cursor.execute(f"PRAGMA table_info({table_name})")
     return any(row[1] == column_name for row in cursor.fetchall())
 
 
 def init_db():
-    """
-    Create the database tables and perform lightweight schema upgrades.
-    """
+    # Create the documents, sessions, and messages tables if they do not exist.
     conn = _connect()
     c = conn.cursor()
 
@@ -72,10 +73,12 @@ def init_db():
 
 
 def compute_file_hash(file_bytes):
+    # Hash uploaded file bytes so duplicate documents can be detected.
     return hashlib.sha256(file_bytes).hexdigest()
 
 
 def get_documents():
+    # Return stored documents ordered from newest to oldest.
     conn = _connect()
     c = conn.cursor()
     c.execute(
@@ -91,6 +94,7 @@ def get_documents():
 
 
 def get_document_by_hash(file_hash):
+    # Look up an existing document by its content hash.
     conn = _connect()
     c = conn.cursor()
     c.execute(
@@ -107,6 +111,7 @@ def get_document_by_hash(file_hash):
 
 
 def get_document(document_id):
+    # Fetch one stored document row by ID.
     conn = _connect()
     c = conn.cursor()
     c.execute(
@@ -123,6 +128,7 @@ def get_document(document_id):
 
 
 def delete_document(document_id):
+    # Delete a document row from SQLite by ID.
     conn = _connect()
     c = conn.cursor()
     c.execute(
@@ -139,6 +145,7 @@ def delete_document(document_id):
 
 
 def create_document(file_name, file_hash):
+    # Insert a new stored document row and return its ID.
     conn = _connect()
     c = conn.cursor()
     c.execute(
@@ -155,6 +162,7 @@ def create_document(file_name, file_hash):
 
 
 def get_or_create_document(file_name, file_bytes):
+    # Reuse an existing document when the uploaded file hash already exists.
     file_hash = compute_file_hash(file_bytes)
     existing = get_document_by_hash(file_hash)
     if existing:
@@ -163,6 +171,7 @@ def get_or_create_document(file_name, file_bytes):
 
 
 def get_sessions():
+    # Return chat sessions joined with their document names for the sidebar.
     conn = _connect()
     c = conn.cursor()
     c.execute(
@@ -179,6 +188,7 @@ def get_sessions():
 
 
 def create_session(document_id, title="New Chat"):
+    # Create a fresh chat session linked to one document.
     conn = _connect()
     c = conn.cursor()
     c.execute(
@@ -195,6 +205,7 @@ def create_session(document_id, title="New Chat"):
 
 
 def get_document_id_for_session(session_id):
+    # Find the document ID associated with a chat session.
     conn = _connect()
     c = conn.cursor()
     c.execute(
@@ -211,6 +222,7 @@ def get_document_id_for_session(session_id):
 
 
 def delete_sessions_for_document(document_id):
+    # Remove all sessions and messages linked to one document.
     conn = _connect()
     c = conn.cursor()
     c.execute(
@@ -246,6 +258,7 @@ def delete_sessions_for_document(document_id):
 
 
 def save_message(session_id, role, content):
+    # Store a chat message and update the session title from the first user prompt.
     conn = _connect()
     c = conn.cursor()
     c.execute(
@@ -267,6 +280,7 @@ def save_message(session_id, role, content):
 
 
 def get_chat_history(session_id):
+    # Return the ordered message history for one chat session.
     conn = _connect()
     c = conn.cursor()
     c.execute(
