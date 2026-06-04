@@ -89,6 +89,6 @@ def delete_pdf(document_id):
 
     print(f"🗑️ Deleted chunks for document_id={document_id}")
 
-# load_pdf(PDF_PATH)
+load_pdf(PDF_PATH)
 
 # delete_pdf("4e217c48-fc67-4e21-80bf-b0a3bccce95c")

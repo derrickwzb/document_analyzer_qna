@@ -17,7 +17,7 @@ if not api_key:
 
 PDF_PATH = "sample.pdf"
 # MODEL_NAME = os.getenv("MODEL_NAME", "gemini-2.0-flash")
-# DB_NAME = os.getenv("DB_NAME", "summaries.db")
+DB_NAME = os.getenv("DB_NAME", "summaries.db")
 
 # if not GROQ_API_KEY:
 #     sys.exit(1)

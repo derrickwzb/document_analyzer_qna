@@ -6,7 +6,7 @@ from groq import Groq
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_chroma import Chroma
 
-from prompts import RAG_QA_PROMPT as SYSTEM_PROMPT
+from utils.prompts import RAG_QA_PROMPT as SYSTEM_PROMPT
 
 load_dotenv()
 
@@ -116,6 +116,7 @@ def ask(question: str):
             {"role": "user",   "content": prompt},
         ],
         temperature=0.5,
+        stream = True,
     )
 
     answer = response.choices[0].message.content
@@ -123,11 +124,11 @@ def ask(question: str):
     print(f"\n🤖 Answer:\n{answer}")
     return answer
 
-# ── INTERACTIVE LOOP ───────────────────────────────────────────────────────────
-print("\n✅ RAG pipeline ready. Type your questions (or 'quit' to exit).\n")
-while True:
-    question = input("Your question: ").strip()
-    if question.lower() in ("quit", "exit", "q"):
-        break
-    if question:
-        ask(question)
+# # ── INTERACTIVE LOOP ───────────────────────────────────────────────────────────
+# print("\n✅ RAG pipeline ready. Type your questions (or 'quit' to exit).\n")
+# while True:
+#     question = input("Your question: ").strip()
+#     if question.lower() in ("quit", "exit", "q"):
+#         break
+#     if question:
+#         ask(question)
