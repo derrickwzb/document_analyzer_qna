@@ -18,8 +18,7 @@ def get_stream(chat_history, fresh_prompt, document_id):
     context = retriever.invoke(fresh_prompt)
 
     # context = retrieve.format_context(docs)
-    prompt = f"""Conversation history:
-                {chat_history}
+    prompt = f"""
 
                 Latest user question:
                 {fresh_prompt}
